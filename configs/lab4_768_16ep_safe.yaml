@@ -1,0 +1,41 @@
+# Lab 4 homework: 16 epochs with flip and shift. Copy of lab4_cnn_768.yaml with the changes named in the title.
+name: lab4_768_16ep_safe
+seed: 42
+data:
+  kind: grey
+  pixel_size: 768
+split:
+  group_column: group_strict
+  val_fraction: 0.2
+  seed: 3
+model:
+  type: small_cnn
+  widths:
+  - 8
+  - 16
+  - 32
+  - 64
+  stem_stride: 4
+  stem_kernel: 7
+  pool: avgmax
+  norm: batch
+  dropout: 0.0
+train:
+  epochs: 16
+  batch_size: 32
+  lr: 0.002
+  weight_decay: 0.05
+  clip_norm: 1.0
+  schedule: warmup_cosine
+  warmup_frac: 0.1
+  select: last
+  augment: safe
+  loss: mse
+  amp: none
+  accum_steps: 1
+  log_checkpoint: false
+wandb:
+  project: dl2026-docphoto
+  tags:
+  - lab4
+  - homework

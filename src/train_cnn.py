@@ -225,6 +225,13 @@ def train_model(cfg: dict, X: np.ndarray, df: pd.DataFrame, train_idx: np.ndarra
     label, on the scoreable rows. Returns the history, the validation
     predictions of the selected epoch, the model, the loss, the checkpoint
     path, the W&B page, the learning rate of every step and the report table.
+
+    `train.early_stopping` (`val_fraction`, `seed`) sets whole units of the
+    *training* rows aside and keeps the epoch that scored best on them, so the
+    validation score is reported for an epoch that it did not choose: honest
+    early stopping, where `select: best` is peeking. The held-out units are
+    not trained on, and the input scaler and the loss prior are fitted without
+    them.
     """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     name = name or cfg["name"]
@@ -237,8 +244,17 @@ def train_model(cfg: dict, X: np.ndarray, df: pd.DataFrame, train_idx: np.ndarra
     y_val = df[config.TARGET].to_numpy()[val_idx]
     ok = df["eval_ok"].to_numpy()[val_idx] == 1
 
-    batches = make_batches(X, train_idx, standardise_inputs(cfg))
-    loss = make_loss(cfg, y_train_all[train_idx])
+    es = tr.get("early_stopping")
+    if es:
+        fit_pos, es_pos = build_splits(df.iloc[train_idx], cfg["split"]["group_column"],
+                                       es["val_fraction"], es["seed"])
+        fit_idx, es_idx = train_idx[fit_pos], train_idx[es_pos]
+        y_es, es_ok = df[config.TARGET].to_numpy()[es_idx], df["eval_ok"].to_numpy()[es_idx] == 1
+    else:
+        fit_idx, es_idx = train_idx, None
+
+    batches = make_batches(X, fit_idx, standardise_inputs(cfg))
+    loss = make_loss(cfg, y_train_all[fit_idx])
     model = build_model(cfg, tuple(X.shape[1:]), loss).to(device)
     if device == "cuda" and X.ndim == 4:
         model = model.to(memory_format=torch.channels_last)
@@ -246,7 +262,7 @@ def train_model(cfg: dict, X: np.ndarray, df: pd.DataFrame, train_idx: np.ndarra
     if tr.get("compile", False) and device == "cuda":
         model = torch.compile(model)
     optimizer = make_adamw(model, cfg)
-    steps_per_epoch = math.ceil(n_batches(len(train_idx), bs) / accum)
+    steps_per_epoch = math.ceil(n_batches(len(fit_idx), bs) / accum)
     scheduler = make_schedule(optimizer, tr["epochs"] * steps_per_epoch, tr)
     augment = get_augment(tr.get("augment", "none"))
     generator = torch.Generator().manual_seed(cfg["seed"])
@@ -255,10 +271,11 @@ def train_model(cfg: dict, X: np.ndarray, df: pd.DataFrame, train_idx: np.ndarra
     n_params = sum(p.numel() for p in model.parameters())
     n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logged = {**cfg, "name": name, "fingerprint": fingerprint_or_note(), "device": device,
-              "n_train_rows": int(len(train_idx)), "n_val_rows": int(len(val_idx)),
+              "n_train_rows": int(len(fit_idx)), "n_val_rows": int(len(val_idx)),
               "parameters": n_params, "trainable_parameters": n_train}
     tracking.init_run(logged, tags=tags, name=name, group=group, job_type=job_type)
-    log(f"{name}: {len(train_idx)} train / {len(val_idx)} val rows, input {tuple(X.shape[1:])}, "
+    log(f"{name}: {len(fit_idx)} train / {len(val_idx)} val rows"
+        + (f" ({len(es_idx)} held out for early stopping)" if es else "") + f", input {tuple(X.shape[1:])}, "
         f"{n_params:,} parameters ({n_train:,} trainable), {device}"
         + (f", accumulating {accum} batches of {bs}" if accum > 1 else ""))
 
@@ -278,24 +295,33 @@ def train_model(cfg: dict, X: np.ndarray, df: pd.DataFrame, train_idx: np.ndarra
             torch.cuda.reset_peak_memory_stats()
         for epoch in range(1, tr["epochs"] + 1):
             t0 = time.time()
-            stats = train_epoch(model, optimizer, scheduler, loss, batches, train_idx, y_t, bs, generator, device,
+            stats = train_epoch(model, optimizer, scheduler, loss, batches, fit_idx, y_t, bs, generator, device,
                                 augment, aug_generator, tr.get("clip_norm", 1.0), accum, amp, on_step)
             pred = predict(model, batches, val_idx, loss, device, amp=amp)
             row = {"epoch": epoch, **stats, "val_rmse": evaluate.rmse(y_val[ok], pred[ok]),
                    "val_mae": evaluate.mae(y_val[ok], pred[ok]), "seconds": time.time() - t0}
+            if es:
+                row["es_rmse"] = evaluate.rmse(y_es[es_ok], predict(model, batches, es_idx, loss, device, amp=amp)[es_ok])
             if device == "cuda":
                 row["max_memory_MB"] = torch.cuda.max_memory_allocated() / 1e6
             history.append(row)
             tracking.log_metrics({f"epoch/{k}": v for k, v in row.items()}, step=max(step, 1))
-            if row["val_rmse"] < best[0]:
-                best = (row["val_rmse"], copy.deepcopy({k: v.detach().cpu() for k, v in base.state_dict().items()}),
+            chosen_on = row["es_rmse"] if es else row["val_rmse"]      # the validation set decides only without `es`
+            if chosen_on < best[0]:
+                best = (chosen_on, copy.deepcopy({k: v.detach().cpu() for k, v in base.state_dict().items()}),
                         pred, epoch)
             log(f"epoch {epoch:3d}  train loss {stats['train_loss']:.4f}  train RMSE {stats['train_rmse']:.4f}  "
-                f"val RMSE {row['val_rmse']:.4f}  grad norm {stats['grad_norm']:.3f}  lr {stats['lr']:.2e}  "
+                f"val RMSE {row['val_rmse']:.4f}  " + (f"early-stop RMSE {row['es_rmse']:.4f}  " if es else "")
+                + f"grad norm {stats['grad_norm']:.3f}  lr {stats['lr']:.2e}  "
                 f"{row['seconds']:.0f} s")
 
         selected = len(history)
-        if tr.get("select", "last") == "best":
+        if es:
+            base.load_state_dict(best[1])
+            pred, selected = best[2], best[3]
+            log(f"keeping epoch {selected} of {len(history)}, chosen on {len(es_idx)} held-out training rows "
+                f"(early-stop RMSE {best[0]:.4f}); the validation score below was not used to choose it")
+        elif tr.get("select", "last") == "best":
             base.load_state_dict(best[1])
             pred, selected = best[2], best[3]
             log(f"keeping epoch {selected} of {len(history)}: chosen on the validation set, so the "
@@ -334,7 +360,8 @@ def train_model(cfg: dict, X: np.ndarray, df: pd.DataFrame, train_idx: np.ndarra
         tracking.finish()
     return {"history": pd.DataFrame(history), "val_pred": pred, "model": model, "loss": loss,
             "checkpoint": ckpt, "url": url, "val_index": val_idx, "ok": ok, "lr_steps": lr_steps,
-            "report": table, "selected_epoch": selected, "scaler": batches.scaler}
+            "report": table, "selected_epoch": selected, "scaler": batches.scaler,
+            "fit_index": fit_idx, "es_index": es_idx}
 
 
 def lr_range_test(cfg: dict, X: np.ndarray, df: pd.DataFrame, train_idx: np.ndarray, *, lr_min: float = 1e-6,
