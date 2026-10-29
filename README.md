@@ -193,6 +193,18 @@ constant's neighbourhood. One validation unit and one early-stopping unit are
 one sample each, so differences of a few hundredths are not evidence either
 way.
 
+**`src/predict.py` for the MLP checkpoint.** `load_model` rebuilds the network
+from the checkpoint's own config and standardiser, `preprocess` turns one file
+into pixels, `predict_one` returns one number in [0, 1]. Checked on the
+checkpoint of the early-stopping run: twenty training photographs differ from
+`train.predict` by at most 1e-7, and the whole validation unit scores 0.2356
+through `predict.py` and through the training loop alike. One trap found on
+the way: the training pixels are made from the 768 px cache (resize, JPEG,
+read back), not from the original, and going straight from a 2048 px original
+to 64 px changes single grey levels by up to 0.43. `preprocess` therefore
+takes the cache's road and reproduces the training table bit for bit.
+`tests/test_predict.py` pins this.
+
 ## Making a Kaggle submission
 
 One command produces one file:

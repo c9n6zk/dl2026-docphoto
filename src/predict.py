@@ -42,10 +42,35 @@ information across the test set. See section 2 of the project description.
 from __future__ import annotations
 
 import argparse
+import tempfile
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+import torch
 import yaml
+
+from src.data.dataset import _resize_one, pixels_of_image
+from src.models.mlp import MLP
+
+CACHE_SIZE = 768   # the long side of the cache that the training pixel table was built from
+
+
+class MLPPredictor:
+    """The trained MLP and the standardiser it was trained with, as one callable.
+
+    Maps the pixels of one image (what `preprocess` returns) to one float.
+    The standardiser lives here, not in `preprocess`, because its two numbers
+    belong to the checkpoint and not to the config.
+    """
+
+    def __init__(self, net: MLP, mean: float, scale: float):
+        self.net, self.mean, self.scale = net, mean, scale
+
+    def __call__(self, pixels: np.ndarray) -> float:
+        x = torch.as_tensor((pixels - self.mean) / self.scale, dtype=torch.float32).unsqueeze(0)
+        with torch.no_grad():
+            return float(self.net(x)[0])
 
 
 def load_model(checkpoint: Path, cfg: dict):
@@ -53,8 +78,21 @@ def load_model(checkpoint: Path, cfg: dict):
 
     Put the model in eval mode and disable gradients. Return something callable
     that maps one preprocessed image to one float.
+
+    The architecture comes from the checkpoint's own config, not from `cfg`:
+    the weights fit one shape only, and the checkpoint knows which.
     """
-    raise NotImplementedError("TODO: build the model and load the checkpoint")
+    ckpt = torch.load(checkpoint, map_location="cpu", weights_only=True)
+    if ckpt["in_dim"] != cfg["data"]["pixel_size"] ** 2:
+        raise SystemExit(f"{checkpoint} takes {ckpt['in_dim']} inputs but the config makes "
+                         f"{cfg['data']['pixel_size']}^2 pixels: wrong config for this checkpoint")
+    m = ckpt["config"]["model"]
+    net = MLP(in_dim=ckpt["in_dim"], hidden=list(m["hidden"]), dropout=m["dropout"])
+    net.load_state_dict(ckpt["state_dict"])      # the prior bias of the constructor is overwritten here
+    net.eval()
+    for p in net.parameters():
+        p.requires_grad_(False)
+    return MLPPredictor(net, ckpt["scaler_mean"], ckpt["scaler_scale"])
 
 
 def preprocess(image_path: Path, cfg: dict):
@@ -63,13 +101,21 @@ def preprocess(image_path: Path, cfg: dict):
     This must match training exactly. A resize or a normalisation that differs
     between training and prediction is the single most common reason a good
     validation score turns into a bad leaderboard score.
+
+    The training pixels were not made from the original photograph but from
+    its 768 px cache (resized, saved as a JPEG, read back). A test image
+    arrives as an original, so it takes the same road here; the shortcut
+    straight to 64 px gives slightly different grey levels.
     """
-    raise NotImplementedError("TODO: load and preprocess a single image")
+    with tempfile.TemporaryDirectory() as tmp:
+        cached = Path(tmp) / "cached.jpg"
+        _resize_one(str(image_path), cached, CACHE_SIZE)
+        return pixels_of_image(cached, cfg["data"]["pixel_size"])
 
 
 def predict_one(model, image_path: Path, cfg: dict) -> float:
     """One image in, one number out."""
-    raise NotImplementedError("TODO: run the model, return a float in [0, 1]")
+    return float(np.clip(model(preprocess(image_path, cfg)), 0.0, 1.0))
 
 
 def main() -> None:
