@@ -163,6 +163,36 @@ submissions/           competition files
 
 Nothing under `data/`, `models/` or `submissions/` is tracked by git.
 
+## My results
+
+Everything below is measured on strict unit 4 (380 scoreable photographs of
+receipts and tables), the validation unit that `build_splits` holds out with
+split seed 3. Lower is better.
+
+| model | val RMSE | note |
+|---|---|---|
+| constant (training mean) | 0.2362 | the yardstick |
+| gradient boosting, 7 handcrafted features | 0.1732 | the baseline to beat |
+| MLP on 64 x 64 pixels, last of 60 epochs | 0.2512 | lab 3, `configs/lab3_mlp.yaml`; worse than the constant |
+| MLP, best epoch picked **on the validation rows** | 0.2243 | epoch 2; optimistic by construction, shown only to measure the bias |
+| MLP, early stopping on held-out **training** units | **0.2356** | `configs/lab3_mlp_es.yaml`, epoch 6, untouched validation unit |
+
+**Honest early stopping.** `train_mlp` sets aside whole strict units of the
+training rows (`train.early_stopping` in the config: unit 6, 284 rows, chosen
+by a seed that keeps the two-column family in training through unit 5), keeps
+the weights of the epoch that scores best on them, and only then reports the
+validation unit. The validation rows decide nothing. `tests/test_early_stopping.py`
+asserts that the three sets of units are disjoint and that the reported score
+is the one of the kept epoch.
+
+What it shows: picking the best epoch on the validation rows themselves
+flatters the MLP by about 0.011 (0.2243 against 0.2356). Honestly chosen, it
+lands level with the constant predictor, which is what the curves said: the
+training RMSE falls to 0.09 while the validation RMSE never leaves the
+constant's neighbourhood. One validation unit and one early-stopping unit are
+one sample each, so differences of a few hundredths are not evidence either
+way.
+
 ## Making a Kaggle submission
 
 One command produces one file:
