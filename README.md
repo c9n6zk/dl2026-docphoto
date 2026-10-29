@@ -252,7 +252,10 @@ not the features, is probably the limit here.
 Same validation unit as above (strict unit 4, 380 scoreable photographs), RMSE,
 lower is better. All of these are one run on one seed unless a row says
 otherwise; the seed-to-seed spread of this network is 0.005 to 0.007 (below),
-so differences under about 0.01 are not results.
+so differences under about 0.01 are not results. The 8 epoch rows and the
+rungs below ran on the CPU; the 12 and 16 epoch rows (homework 2, 4) ran on the
+Mac GPU (MPS), and the intervals compare them with the CPU 8 epoch run, so
+part of the gap may be the device (see *Run-to-run noise*).
 
 | model | val RMSE | note |
 |---|---|---|
@@ -261,9 +264,9 @@ so differences under about 0.01 are not results.
 | SmallCNN, 256 px, 8 epochs | 0.2107 | 24,761 parameters, 8 s per epoch on the CPU |
 | SmallCNN, 768 px (stride-4 stem), 8 epochs | **0.1784** | 24,953 parameters; 768 minus 256: -0.0324, 95 % over pages [-0.0459, -0.0175] |
 | + flip and shift, 8 epochs | 0.1816 | +0.0033 [-0.0033, +0.0090] against no augmentation: a tie |
-| + flip and shift, 12 epochs | 0.1697 | -0.0087 [-0.0137, -0.0043] against the 8 epoch run |
-| + flip and shift, 16 epochs | 0.1692 | -0.0092 [-0.0178, -0.0007] |
-| + flip and shift, 16 epochs, honest early stopping | **0.1618** | epoch 15, chosen on a held-out *training* unit; see below |
+| + flip and shift, 12 epochs | 0.1705 | MPS; -0.0079 [-0.0134, -0.0024] against the 8 epoch run; the same config on the CPU gave 0.1697 |
+| + flip and shift, 16 epochs | 0.1668 | MPS; -0.0115 [-0.0165, -0.0060]; CPU 0.1692 |
+| + flip and shift, 16 epochs, honest early stopping | **0.1655** | MPS; epoch 14, chosen on a held-out *training* unit, -0.0129 [-0.0191, -0.0058]; CPU 0.1618 (epoch 15); see below |
 
 **Resolution is what moves the number.** At 64 px a 9 pt letter is 0.7 px tall
 (lab 3's MLP ended at 0.2512, worse than the constant); the same kind of network
@@ -283,25 +286,27 @@ peeking, and no model change.
 **Honest early stopping for the CNN.** `train.early_stopping` in the config
 (`configs/lab4_768_16ep_safe_es.yaml`) sets strict unit 6 aside from the
 training rows, trains on the other 1,177, and keeps the epoch with the best score on
-unit 6 (epoch 15, 0.1703 there). The validation unit then reports 0.1618, and
-it chose nothing. Its own curve bottomed at 0.1553 in epoch 13, so picking
-the epoch on validation would have reported a number 0.0065 too good. Two
-cautions: this is one run, and it is 0.0165 better than the 8 epoch reference but only about 0.008
-better than the 12 and 16 epoch runs, which is about one seed spread, and it trains on fewer rows, so
+unit 6 (MPS run: epoch 14, 0.1727 there). The validation unit then reports 0.1655, and
+it chose nothing. Its own curve bottomed at 0.1601 in epoch 13, so picking
+the epoch on validation would have reported a number 0.0054 too good. The same
+config on the CPU kept epoch 15 and reported 0.1618, 0.0037 apart: one device
+change, as large as one seed. Two cautions: this is one run per device, and it
+is 0.0129 better than the 8 epoch reference but within 0.001 of the 16 epoch run
+without early stopping (0.1668), and it trains on 1,177 rows instead of 1,461, so
 "early stopping helps" is not what this table shows; "it reports an honest number" is.
 
 **Does it overfit, and where?** (homework 2) Not in 16 epochs. The validation RMSE
-falls from 0.2121 to 0.1692, the training RMSE (on augmented images) from 0.2273 to
-0.1759 and stays *above* it. The validation curve is noisy from epoch to
-epoch (0.1645 and 0.2215 at epochs 9 and 8 of the 12 epoch run), which is another reason to
+falls from 0.2076 to 0.1668 (MPS run), the training RMSE (on augmented images) from 0.2272 to
+0.1734 and stays *above* it. The validation curve is noisy from epoch to
+epoch (0.1893 and 0.1651 at epochs 11 and 12 of the same run), which is another reason to
 choose an epoch on held-out training rows and not by eye.
 
 **Homework question 5: the network does not overfit; should the next experiment
 change regularisation or capacity?** Capacity, or training time. The evidence, with
-numbers: the training RMSE (0.176-0.178 at 12 and 16 epochs) stays above the
-validation RMSE (0.169-0.170), which is underfitting; four more epochs bought
--0.009 where weight decay 0 and 0.5 moved the score by 0.0001 and 0.003, inside
-the noise; and the one model with more capacity, `resnet_small`, is the only
+numbers: the training RMSE (0.173-0.178 at 12 and 16 epochs) stays above the
+validation RMSE (0.167-0.171), which is underfitting; four more epochs bought
+-0.004 (12 to 16 epochs, MPS: 0.1705 to 0.1668), about the size of weight
+decay 0 and 0.5 (0.0001 and 0.003), all inside the noise; and the one model with more capacity, `resnet_small`, is the only
 one that begins to overfit (training 0.1751 against validation 0.1897, a gap of
 0.0146). Regularisation comes after the curves separate. Next: more epochs and a wider
 network or a pretrained backbone, one change per run. Caveat: `resnet_small`
