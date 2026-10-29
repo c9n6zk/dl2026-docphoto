@@ -154,10 +154,18 @@ class SmallCNN(nn.Module):
                  dropout: float = 0.0, prior: float = 0.5, stem_stride: int = 2, stem_kernel: int = 5,
                  pool: str = "avg"):
         super().__init__()
-        raise NotImplementedError("TASK 1: build the layers of SmallCNN")
+        layers: list[nn.Module] = [conv_block(in_ch, widths[0], stride=stem_stride, kernel=stem_kernel, norm=norm)]
+        for c_in, c_out in zip(widths[:-1], widths[1:], strict=True):
+            layers += [conv_block(c_in, c_out, norm=norm), nn.MaxPool2d(2)]
+        self.features = nn.Sequential(*layers)
+        self.pool = GlobalPool(pool)
+        self.drop = nn.Dropout(dropout)
+        self.head = nn.Linear(widths[-1] * self.pool.factor, 1)
+        init_weights(self)                 # first: it resets every Linear, the head included
+        prior_bias(self.head, prior)       # then the head's bias, so that step 0 predicts the training mean
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError("TASK 1: the forward pass of SmallCNN")
+        return self.head(self.drop(self.pool(self.features(x)))).squeeze(1)
 
 
 class ResBlock(nn.Module):
