@@ -176,6 +176,7 @@ split seed 3. Lower is better.
 | MLP on 64 x 64 pixels, last of 60 epochs | 0.2512 | lab 3, `configs/lab3_mlp.yaml`; worse than the constant |
 | MLP, best epoch picked **on the validation rows** | 0.2243 | epoch 2; optimistic by construction, shown only to measure the bias |
 | MLP, early stopping on held-out **training** units | **0.2356** | `configs/lab3_mlp_es.yaml`, epoch 6, untouched validation unit |
+| gradient boosting, 7 features + `ink_fraction` | 0.1719 | my feature; 0.0013 better, within the noise |
 
 **Honest early stopping.** `train_mlp` sets aside whole strict units of the
 training rows (`train.early_stopping` in the config: unit 6, 284 rows, chosen
@@ -204,6 +205,47 @@ read back), not from the original, and going straight from a 2048 px original
 to 64 px changes single grey levels by up to 0.43. `preprocess` therefore
 takes the cache's road and reproduces the training table bit for bit.
 `tests/test_predict.py` pins this.
+
+**A feature of my own: `ink_fraction`.** I did not look at the validation unit
+to design it. The baseline's worst errors were found out-of-fold on the five
+*training* units (hold out each in turn; 0.2038 RMSE overall), and the worst
+photographs looked at in the native 2048 px originals. Two kinds stood out:
+
+* photographer P142's `sparse` pages, label about 1.0 (perfectly readable),
+  predicted about 0.3. The text is sharp but small and grey, and the page
+  fills a tenth of a tall 946 x 2048 frame; the rest is white table and
+  trousers. Sharpness over the whole frame, or over its *blurriest* inner
+  tile, is dominated by what is not text.
+* a motion-blurred sparse page and a grainy receipt predicted as sharp (label
+  0.12 and 0.0, predicted 0.84 and 0.93). I suspect the grain: it has a large
+  Laplacian variance of its own. I did not test that.
+
+What the seven miss is *where the text is*. They measure paper, table and
+grain exactly as they measure letters. I tried four ways of looking at the ink
+only (a black-hat transform picks out dark strokes thinner than 11 px at
+768 px), each added to the seven and scored out-of-fold on the training units:
+
+| added feature | what it measures | out-of-fold RMSE |
+|---|---|---|
+| none (the seven) | | 0.2038 |
+| `ink_edge` | edge gradient over stroke contrast on the ink, the sharpness of the letters themselves | 0.2035 |
+| `ink_lap` | the same with the Laplacian | 0.2058 |
+| `ink_contrast` | median stroke contrast | 0.2039 |
+| **`ink_fraction`** | share of the frame covered by ink | **0.1963** |
+
+The measures of how sharp the letters are did not help; the *amount of text in
+the frame* did, and that is the one I kept (`src/features/handcrafted.py`,
+`tests/test_features.py`). On the untouched validation unit the baseline goes
+from 0.1732 to 0.1719.
+
+Read that with care. It is a small gain, not an achievement: 0.0013 is far
+inside the run-to-run and unit-to-unit noise, and I picked it as the best of
+four on only five training units. The worst photographs did not get fixed
+either: the P142 pages move from 0.30 to about 0.4 against a label of 1.0, and
+P142's RMSE goes from 0.44 to 0.40. A model that has never seen a `sparse`
+page, because unit 1 is the only unit that holds that family and it is the one
+held out, cannot learn what a good one looks like from eight numbers. That,
+not the features, is probably the limit here.
 
 ## Making a Kaggle submission
 

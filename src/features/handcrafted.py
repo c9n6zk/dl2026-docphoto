@@ -1,6 +1,6 @@
 """Classical image-quality features for the baseline model.
 
-Seven features for the baseline, given to you. Five are whole-frame, two are tile-wise with a
+Seven features for the baseline, given to you, and an eighth of my own (`ink_fraction`, below). Five are whole-frame, two are tile-wise with a
 non-mean summary, which is the part that needs thought: the *minimum*
 sharpness over tiles sees a smear across one column that the mean sharpness
 averages away, and the *maximum* dark fraction over tiles sees a shadow across
@@ -76,6 +76,32 @@ def tile_dark_max(gray: np.ndarray, threshold: int = 64) -> float:
     return float(max((t < threshold).mean() for t in _tiles(gray)))
 
 
+# --------------------------------------------------- my own: where the text is
+
+INK_CONTRAST = 18      # a stroke must be at least this much darker than its surroundings, out of 255
+INK_MIN_PIXELS = 300   # fewer stroke pixels than this is noise, not text
+
+
+def ink_fraction(gray: np.ndarray) -> float:
+    """The share of the frame covered by ink: dark strokes thinner than the 11 px kernel.
+
+    None of the seven knows where the text is. Sharpness is measured over
+    paper, table and sensor grain alike, so a page that fills a tenth of a
+    tall frame, or a sparse page whose few lines sit in a grainy margin, reads
+    as blurred or as sharp for reasons that have nothing to do with the
+    letters. This says how much text there is to be sharp or blurred, and
+    lets the model weigh the other seven accordingly. A black-hat transform
+    keeps what is darker than its surroundings and thinner than the kernel,
+    which is what a stroke is; the light smoothing first keeps grain out.
+    Returns 0 when too few pixels qualify to be text.
+    """
+    smooth = cv2.GaussianBlur(gray, (0, 0), 0.8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+    strokes = cv2.morphologyEx(smooth, cv2.MORPH_BLACKHAT, kernel) > INK_CONTRAST
+    n = int(strokes.sum())
+    return float(n / strokes.size) if n >= INK_MIN_PIXELS else 0.0
+
+
 FEATURES = {
     "lap_var": laplacian_variance,
     "dark_frac": dark_fraction,
@@ -84,6 +110,7 @@ FEATURES = {
     "bright_frac": bright_fraction,
     "tile_lapvar_min": tile_lapvar_min,
     "tile_dark_max": tile_dark_max,
+    "ink_fraction": ink_fraction,
 }
 
 
