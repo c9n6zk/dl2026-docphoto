@@ -38,7 +38,11 @@ def param_groups(model: nn.Module, weight_decay: float) -> list[dict]:
     `requires_grad == False` (a frozen backbone in lab 5). Every trainable
     parameter in exactly one group.
     """
-    raise NotImplementedError("TASK 3: the two parameter groups")
+    trainable = [p for p in model.parameters() if p.requires_grad]
+    decay = [p for p in trainable if p.ndim > 1]           # convolution and linear weights
+    no_decay = [p for p in trainable if p.ndim <= 1]       # biases, norm scales and shifts
+    return [{"params": decay, "weight_decay": weight_decay},
+            {"params": no_decay, "weight_decay": 0.0}]
 
 
 def make_adamw(model: nn.Module, cfg: dict) -> torch.optim.Optimizer:
