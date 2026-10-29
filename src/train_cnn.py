@@ -37,6 +37,7 @@ import argparse
 import contextlib
 import copy
 import math
+import os
 import time
 from dataclasses import dataclass
 
@@ -65,6 +66,16 @@ def fingerprint_or_note() -> dict:
         return fingerprint()
     except (ImportError, NotImplementedError) as e:
         return {"missing": f"{type(e).__name__}: src.repro.fingerprint (lab 5, TASK 4)"}
+
+
+def default_device() -> str:
+    """CUDA if there is one, else the Mac GPU (MPS), else the CPU. `DL_DEVICE=cpu` forces a choice."""
+    forced = os.environ.get("DL_DEVICE")
+    if forced:
+        return forced
+    if torch.cuda.is_available():
+        return "cuda"
+    return "mps" if torch.backends.mps.is_available() else "cpu"
 
 
 def amp_context(device: str, amp: str):
@@ -233,7 +244,7 @@ def train_model(cfg: dict, X: np.ndarray, df: pd.DataFrame, train_idx: np.ndarra
     not trained on, and the input scaler and the loss prior are fitted without
     them.
     """
-    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    device = device or default_device()
     name = name or cfg["name"]
     set_seed(cfg["seed"])
     tr = cfg["train"]
@@ -373,7 +384,7 @@ def lr_range_test(cfg: dict, X: np.ndarray, df: pd.DataFrame, train_idx: np.ndar
     one at the bottom of the smoothed curve. Returns the curve and that
     suggestion. One W&B run (job_type lr_range_test).
     """
-    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    device = device or default_device()
     set_seed(cfg["seed"])
     tr = cfg["train"]
     y_t = torch.from_numpy(df[config.TARGET].to_numpy().astype(np.float32))
