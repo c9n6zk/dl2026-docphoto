@@ -185,10 +185,16 @@ class ResBlock(nn.Module):
 
     def __init__(self, channels: int, norm: str = "batch"):
         super().__init__()
-        raise NotImplementedError("TASK ⭐: the layers of ResBlock")
+        self.norm1 = make_norm(norm, channels)
+        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        self.norm2 = make_norm(norm, channels)
+        self.conv2 = nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        self.conv2.zero_init = True        # init_weights starts the branch at zero: the block is the identity
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError("TASK ⭐: the forward pass of ResBlock")
+        out = self.conv1(torch.relu(self.norm1(x)))
+        out = self.conv2(torch.relu(self.norm2(out)))
+        return x + out
 
 
 class ResNetSmall(nn.Module):
