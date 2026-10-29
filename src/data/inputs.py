@@ -96,9 +96,12 @@ def preprocess_one(image_path: str | Path, cfg: dict, checkpoint: dict) -> torch
     kind = cfg["data"].get("kind", "grey")
     if kind == "grey":
         s = cfg["data"]["pixel_size"]
-        x = pixels_of_image(as_cached(image_path), s).reshape(1, 1, s, s)
+        # The training table holds bytes (`grey_table` rounds to uint8) and `Batches.prepare` divides them by 255
+        # before it standardises. Skipping the rounding moves a pixel by up to half a grey level, which a 768 px
+        # network already feels in the fourth decimal of the RMSE.
+        q = np.rint(pixels_of_image(as_cached(image_path), s) * 255).astype(np.uint8).reshape(1, 1, s, s)
         sc = checkpoint["scaler"]
-        return torch.from_numpy(((x - sc["mean"]) / sc["scale"]).astype(np.float32))
+        return (torch.from_numpy(q).float().div_(255) - sc["mean"]) / sc["scale"]
     raise ValueError(f"unknown input kind {kind!r}")
 
 

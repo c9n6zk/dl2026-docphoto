@@ -63,3 +63,52 @@ def test_a_checkpoint_of_another_size_is_refused(toy) -> None:
     cfg, ckpt, _, _ = toy
     with pytest.raises(SystemExit):
         predict.load_model(ckpt, {"data": {"pixel_size": SIZE * 2}})
+
+
+# ----------------------------------------------------------------- lab 4: a CNN checkpoint
+
+def _cnn_checkpoint(tmp_path, size: int = 32):
+    from src import losses
+    from src.models.build import build_model
+
+    cfg = {"data": {"kind": "grey", "pixel_size": size},
+           "model": {"type": "small_cnn", "widths": [4, 8], "stem_stride": 2, "stem_kernel": 3, "pool": "avgmax",
+                     "norm": "batch", "dropout": 0.0},
+           "train": {"loss": "mse"}}
+    loss = losses.MSE(prior=0.7)
+    torch.manual_seed(0)
+    model = build_model(cfg, (1, size, size), loss)
+    for p in model.parameters():                   # leave the constant start so that a wrong path shows
+        p.data += 0.05 * torch.randn_like(p)
+    ckpt = {"state_dict": model.state_dict(), "config": cfg, "in_shape": (1, size, size),
+            "loss_state": loss.state(), "scaler": {"mean": 0.62, "scale": 0.27}}
+    path = tmp_path / "cnn.pt"
+    torch.save(ckpt, path)
+    return cfg, path, model, loss, ckpt
+
+
+def test_cnn_preprocessing_is_the_training_table_row(toy, tmp_path) -> None:
+    """`grey_table` stores rounded bytes and `Batches.prepare` scales and standardises them; so must predict."""
+    from src.data import inputs
+    from src.train_cnn import Batches
+
+    cfg, _, _, _, ckpt = _cnn_checkpoint(tmp_path)
+    img = toy[3][0]
+    cached = tmp_path / "cached.jpg"
+    _resize_one(str(img), cached, predict.CACHE_SIZE)
+    row = np.rint(pixels_of_image(cached, 32) * 255).astype(np.uint8).reshape(1, 1, 32, 32)
+    sc = ckpt["scaler"]
+    want = Batches(torch.from_numpy(row), sc, (0.5 - sc["mean"]) / sc["scale"]).prepare(torch.from_numpy(row), "cpu")
+    torch.testing.assert_close(inputs.preprocess_one(img, cfg, ckpt), want, rtol=0, atol=0)
+
+
+def test_cnn_one_image_alone_equals_the_training_loop(toy, tmp_path) -> None:
+    cfg, path, model, loss, ckpt = _cnn_checkpoint(tmp_path)
+    loaded = predict.load_model(path, cfg)
+    assert isinstance(loaded, predict.CNNPredictor)
+    from src.data import inputs
+    model.eval()
+    for img in toy[3]:
+        with torch.no_grad():
+            want = float(loss.predict(model(inputs.preprocess_one(img, cfg, ckpt)))[0])
+        assert predict.predict_one(loaded, img, cfg) == pytest.approx(want, abs=1e-6)

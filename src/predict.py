@@ -42,6 +42,7 @@ information across the test set. See section 2 of the project description.
 from __future__ import annotations
 
 import argparse
+import pickle
 import tempfile
 from pathlib import Path
 
@@ -50,7 +51,10 @@ import pandas as pd
 import torch
 import yaml
 
+from src import losses
+from src.data import inputs
 from src.data.dataset import _resize_one, pixels_of_image
+from src.models.build import build_model
 from src.models.mlp import MLP
 
 CACHE_SIZE = 768   # the long side of the cache that the training pixel table was built from
@@ -67,14 +71,36 @@ class MLPPredictor:
     def __init__(self, net: MLP, mean: float, scale: float):
         self.net, self.mean, self.scale = net, mean, scale
 
+    def prepare(self, image_path: Path, cfg: dict) -> np.ndarray:
+        return preprocess(image_path, cfg)
+
     def __call__(self, pixels: np.ndarray) -> float:
         x = torch.as_tensor((pixels - self.mean) / self.scale, dtype=torch.float32).unsqueeze(0)
         with torch.no_grad():
             return float(self.net(x)[0])
 
 
+class CNNPredictor:
+    """A lab 4 checkpoint: the network, the loss that turns its logit into a prediction, and the scaler.
+
+    Preprocessing comes from `inputs.preprocess_one`, which rebuilds exactly
+    what the training table and loop held, and it reads the *checkpoint's*
+    config, so a config file that drifted since training cannot change it.
+    """
+
+    def __init__(self, model: torch.nn.Module, loss: losses.Loss, ckpt: dict):
+        self.model, self.loss, self.ckpt = model, loss, ckpt
+
+    def prepare(self, image_path: Path, cfg: dict) -> torch.Tensor:
+        return inputs.preprocess_one(image_path, self.ckpt["config"], self.ckpt)
+
+    def __call__(self, x: torch.Tensor) -> float:
+        with torch.no_grad():
+            return float(self.loss.predict(self.model(x))[0])
+
+
 def load_model(checkpoint: Path, cfg: dict):
-    """Rebuild the architecture from the config and load the saved weights.
+    """Rebuild the architecture from the checkpoint and load the saved weights (lab 3 MLP or lab 4 CNN).
 
     Put the model in eval mode and disable gradients. Return something callable
     that maps one preprocessed image to one float.
@@ -82,7 +108,21 @@ def load_model(checkpoint: Path, cfg: dict):
     The architecture comes from the checkpoint's own config, not from `cfg`:
     the weights fit one shape only, and the checkpoint knows which.
     """
-    ckpt = torch.load(checkpoint, map_location="cpu", weights_only=True)
+    try:
+        ckpt = torch.load(checkpoint, map_location="cpu", weights_only=True)
+    except pickle.UnpicklingError:       # a lab 4 checkpoint also holds the numpy scaler; it is our own file
+        ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    if "loss_state" in ckpt:                                              # a lab 4 checkpoint, a CNN
+        if ckpt["in_shape"][-1] != cfg["data"]["pixel_size"]:
+            raise SystemExit(f"{checkpoint} was trained at {ckpt['in_shape'][-1]} px but the config says "
+                             f"{cfg['data']['pixel_size']}: wrong config for this checkpoint")
+        loss = losses.from_state(ckpt["loss_state"])
+        model = build_model(ckpt["config"], tuple(ckpt["in_shape"]), loss)
+        model.load_state_dict(ckpt["state_dict"])
+        model.eval()
+        for p in model.parameters():
+            p.requires_grad_(False)
+        return CNNPredictor(model, loss, ckpt)
     if ckpt["in_dim"] != cfg["data"]["pixel_size"] ** 2:
         raise SystemExit(f"{checkpoint} takes {ckpt['in_dim']} inputs but the config makes "
                          f"{cfg['data']['pixel_size']}^2 pixels: wrong config for this checkpoint")
@@ -115,7 +155,7 @@ def preprocess(image_path: Path, cfg: dict):
 
 def predict_one(model, image_path: Path, cfg: dict) -> float:
     """One image in, one number out."""
-    return float(np.clip(model(preprocess(image_path, cfg)), 0.0, 1.0))
+    return float(np.clip(model(model.prepare(image_path, cfg)), 0.0, 1.0))
 
 
 def main() -> None:
