@@ -21,6 +21,9 @@ x-common: &common
     # whatever mode WANDB_MODE says, including disabled.
     WANDB_API_KEY: ${WANDB_API_KEY:-}
     WANDB_MODE: ${WANDB_MODE:-online}
+    # wandb-core (Go) segfaults under the amd64 emulation on Apple Silicon; the
+    # Python service works everywhere, and a few scalars per epoch do not need more.
+    WANDB__REQUIRE_LEGACY_SERVICE: "TRUE"
   # PyTorch DataLoader workers share memory through /dev/shm, which defaults to
   # a very small size in containers.
   shm_size: "8gb"

@@ -70,7 +70,17 @@ def train_epoch(model: torch.nn.Module, optimizer: torch.optim.Optimizer, loss_f
     run is reproducible, step the optimiser once per minibatch, and return the
     mean training loss over the epoch, weighted by minibatch size.
     """
-    raise NotImplementedError("TASK 4: the minibatch loop")
+    model.train()                      # predict/validate leave the model in eval mode
+    order = torch.randperm(len(X), generator=generator)
+    total = 0.0
+    for start in range(0, len(X), batch_size):
+        idx = order[start:start + batch_size].to(X.device)
+        optimizer.zero_grad()
+        loss = loss_fn(model(X[idx]), y[idx])
+        loss.backward()
+        optimizer.step()
+        total += loss.item() * len(idx)
+    return total / len(X)
 
 
 def predict(model: torch.nn.Module, X: torch.Tensor, batch_size: int = 1024) -> np.ndarray:
@@ -79,12 +89,18 @@ def predict(model: torch.nn.Module, X: torch.Tensor, batch_size: int = 1024) -> 
     Evaluation mode, no gradients, and it must give the same answer for a row
     whether that row is predicted alone or inside a batch.
     """
-    raise NotImplementedError("TASK 5: inference")
+    model.eval()
+    out = []
+    with torch.no_grad():
+        for start in range(0, len(X), batch_size):
+            out.append(model(X[start:start + batch_size]).cpu().numpy())
+    return np.concatenate(out)
 
 
 def validate(model: torch.nn.Module, X_val: torch.Tensor, y_val: np.ndarray, ok: np.ndarray) -> float:
     """TASK 6. RMSE on the validation rows where `ok` is True (the scoreable ones)."""
-    raise NotImplementedError("TASK 6: validation")
+    pred = predict(model, X_val)
+    return float(rmse(y_val[ok], pred[ok]))
 
 
 # ------------------------------------------------------------------ given
