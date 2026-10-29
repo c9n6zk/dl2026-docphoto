@@ -247,6 +247,87 @@ page, because unit 1 is the only unit that holds that family and it is the one
 held out, cannot learn what a good one looks like from eight numbers. That,
 not the features, is probably the limit here.
 
+## Lab 4: a CNN from scratch
+
+Same validation unit as above (strict unit 4, 380 scoreable photographs), RMSE,
+lower is better. All of these are one run on one seed unless a row says
+otherwise; the seed-to-seed spread of this network is 0.005 to 0.007 (below),
+so differences under about 0.01 are not results.
+
+| model | val RMSE | note |
+|---|---|---|
+| constant (training mean) | 0.2362 | |
+| gradient boosting, handcrafted features | 0.1719 | now eight features: lab 3's `ink_fraction` is in `FEATURES`, the lab 3 seven gave 0.1732 |
+| SmallCNN, 256 px, 8 epochs | 0.2107 | 24,761 parameters, 8 s per epoch on the CPU |
+| SmallCNN, 768 px (stride-4 stem), 8 epochs | **0.1784** | 24,953 parameters; 768 minus 256: -0.0324, 95 % over pages [-0.0459, -0.0175] |
+| + flip and shift, 8 epochs | 0.1816 | +0.0033 [-0.0033, +0.0090] against no augmentation: a tie |
+| + flip and shift, 12 epochs | 0.1697 | -0.0087 [-0.0137, -0.0043] against the 8 epoch run |
+| + flip and shift, 16 epochs | 0.1692 | -0.0092 [-0.0178, -0.0007] |
+| + flip and shift, 16 epochs, honest early stopping | **0.1618** | epoch 15, chosen on a held-out *training* unit; see below |
+
+**Resolution is what moves the number.** At 64 px a 9 pt letter is 0.7 px tall
+(lab 3's MLP ended at 0.2512, worse than the constant); the same kind of network
+at 768 px reaches the handcrafted baseline with forty times fewer parameters than the MLP.
+The stem reads all 590,000 pixels but writes a 192 x 192 map, so nine times the
+pixels cost about three times the time per epoch (8 s to 24 s on the CPU).
+
+**The other rungs (768 px, 8 epochs, one run each).** Shuffled labels 0.2341
+(the check passes: it stays at the constant, 0.2362; on permuted targets the
+training RMSE does not leave it either, 0.2334, so in 8 epochs this small network cannot even memorise); weight decay 0: 0.1783; weight decay
+0.5: 0.1754; GroupNorm: 0.1725; `resnet_small` (123,289 parameters): 0.1897 with
+a training RMSE of 0.1751, the only model whose training score runs ahead of
+its validation score. Keeping the best epoch *as chosen on the validation set*
+gave 0.1739, 0.0045 better than the same run's last epoch: that is the bias of
+peeking, and no model change.
+
+**Honest early stopping for the CNN.** `train.early_stopping` in the config
+(`configs/lab4_768_16ep_safe_es.yaml`) sets strict unit 6 aside from the
+training rows, trains on the other 1,177, and keeps the epoch with the best score on
+unit 6 (epoch 15, 0.1703 there). The validation unit then reports 0.1618, and
+it chose nothing. Its own curve bottomed at 0.1553 in epoch 13, so picking
+the epoch on validation would have reported a number 0.0065 too good. Two
+cautions: this is one run, and it is 0.0165 better than the 8 epoch reference but only about 0.008
+better than the 12 and 16 epoch runs, which is about one seed spread, and it trains on fewer rows, so
+"early stopping helps" is not what this table shows; "it reports an honest number" is.
+
+**Does it overfit, and where?** (homework 2) Not in 16 epochs. The validation RMSE
+falls from 0.2121 to 0.1692, the training RMSE (on augmented images) from 0.2273 to
+0.1759 and stays *above* it. The validation curve is noisy from epoch to
+epoch (0.1645 and 0.2215 at epochs 9 and 8 of the 12 epoch run), which is another reason to
+choose an epoch on held-out training rows and not by eye.
+
+**Homework question 5: the network does not overfit; should the next experiment
+change regularisation or capacity?** Capacity, or training time. The evidence, with
+numbers: the training RMSE (0.176-0.178 at 12 and 16 epochs) stays above the
+validation RMSE (0.169-0.170), which is underfitting; four more epochs bought
+-0.009 where weight decay 0 and 0.5 moved the score by 0.0001 and 0.003, inside
+the noise; and the one model with more capacity, `resnet_small`, is the only
+one that begins to overfit (training 0.1751 against validation 0.1897, a gap of
+0.0146). Regularisation comes after the curves separate. Next: more epochs and a wider
+network or a pretrained backbone, one change per run. Caveat: `resnet_small`
+scored worse than the SmallCNN here, in one run, so more capacity is not
+automatically better at this budget.
+
+**Run-to-run noise.** Three seeds of the 768 px run on the Mac GPU: no
+augmentation 0.1732, 0.1795, 0.1726 (mean 0.1751, spread 0.0069); with flip and
+shift 0.1787, 0.1774, 0.1735 (mean 0.1765, spread 0.0052). The same seed on the
+CPU gave 0.1784 against 0.1732 on the GPU: a change of device moves the score
+as much as a change of seed, which is why every comparison above is read
+against about 0.005.
+
+**Device.** `train_cnn.default_device()` picks CUDA, then the Mac GPU (MPS), then the
+CPU; `DL_DEVICE=cpu` forces one. On the 768 px run, 8 epochs: 3.5 s per epoch on
+MPS against 24 s on the CPU. The two checks before training (overfit one batch,
+the same seed twice) pass on MPS too.
+
+**`predict.py` for a CNN checkpoint** (homework 1). The dry run on the
+validation unit through `src/predict.py` reproduces the training RMSE to five
+decimals: 0.17835 at 768 px and 0.21071 at 256 px. It did not at first
+(0.1782 against 0.1784). The training table stores photographs as bytes, rounded to
+a whole grey level, and `inputs.preprocess_one` had skipped the rounding; half a grey
+level was enough for the 768 px network to show it in the fourth decimal. Rounding
+is now in `preprocess_one`, and `tests/test_predict.py` pins it.
+
 ## Making a Kaggle submission
 
 One command produces one file:
